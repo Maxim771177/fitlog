@@ -25,7 +25,16 @@ main{padding:8px;max-width:760px;margin:auto}
 .sc{font-size:12px;color:var(--mut);margin:2px 0}
 .st{font-size:12px;display:flex;flex-direction:column;gap:1px;margin-bottom:4px}
 .st b{font-weight:700}
-.set{display:grid;grid-template-columns:14px 1fr 1fr;gap:3px;align-items:center;margin-top:3px}
+.set{display:grid;grid-template-columns:14px 1fr 1fr 30px;gap:3px;align-items:center;margin-top:3px}
+button.ok{width:30px;height:30px;padding:0;border-radius:8px;border:1px solid var(--ln);background:var(--card);color:var(--mut);font-size:16px;cursor:pointer}
+button.ok:disabled{opacity:.35;cursor:default}
+button.ok.dirty{background:var(--tx);color:var(--bg);border-color:var(--tx)}
+button.ok.sv{background:#12a150;color:#fff;border-color:#12a150}
+button.ok.q{background:#f79009;color:#fff;border-color:#f79009}
+button.ok.del{background:#d92d20;color:#fff;border-color:#d92d20}
+button.fin{width:100%;padding:11px;margin:4px 0 14px;border-radius:10px;border:0;background:var(--tx);color:var(--bg);font:inherit;font-weight:700;cursor:pointer}
+button.fin2{width:100%;padding:8px;margin:2px 0 14px;border-radius:10px;border:1px solid var(--ln);background:var(--card);color:var(--mut);font:inherit;font-size:13px;cursor:pointer}
+.finok{text-align:center;padding:9px;margin-top:4px;border-radius:10px;background:var(--ok);font-weight:700}
 .set span{font-size:11px;color:var(--mut)}
 input{width:100%;min-width:0;padding:5px 2px;text-align:center;border:1px solid var(--ln);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:14px}
 input.done{background:var(--ok)}
@@ -151,6 +160,7 @@ const st = {
   pos: LS.get("pos", { Max:{cycle:3,week:5,day:4}, Shirin:{cycle:3,week:5,day:4} }),
   view: "train", puser: LS.get("puser","Max"),
   api: LS.get("api", DEFAULT_API_URL),
+  seen: LS.get("seenFin", {}),         // последняя завершённая тренировка, по которой уже сдвинули позицию
   logs: LS.get("logs_cache", []),      // кэш; источник истины — Google Sheets
   queue: LS.get("queue", []),          // ещё не отправленные изменения
   program: null
@@ -176,7 +186,10 @@ async function pull(){
     st.logs = r.logs.filter(l => !pend.has(l.id) && !del.has(l.id)).concat(st.queue.filter(q=>q.op==="save").map(q=>q.row));
     LS.set("logs_cache", st.logs);
     if(r.program && r.program.length) st.program = buildProgram(r.program);
-    setStatus("✓ синхронизировано"); render();
+    followFinished();
+    setStatus("✓ синхронизировано");
+    const typing = document.activeElement && document.activeElement.tagName==="INPUT";
+    if(!typing) render();            // не перерисовываем под руками, пока вводите вес
   }catch(e){ setStatus("офлайн, кэш"); }
 }
 let flushing = false;
@@ -191,7 +204,7 @@ async function flush(){
       st.queue.shift(); LS.set("queue", st.queue);
     }
     setStatus("✓ сохранено в таблицу");
-  }catch(e){ setStatus(`в очереди: ${st.queue.length}`); }
+  }catch(e){ setStatus(`нет связи, в очереди: ${st.queue.length}`); }
   flushing = false;
 }
 function buildProgram(rows){
@@ -208,15 +221,38 @@ const today = () => new Date().toISOString().slice(0,10);
 const P = u => st.pos[u];
 const wid = u => `C${P(u).cycle}|${u}|${P(u).week}|${P(u).day}`;     // ключ тренировки
 const sid = (u,ex,n) => wid(u) + "|" + ex + "|" + n;
-// Тренировка считается выполненной, если в ней сохранён хоть один подход
-const wkey = l => { const m = /^(C\d+\|[^|]+\|\d+\|\d+)\|/.exec(String(l.id)); return m ? m[1] : null; };
+// Тренировка считается выполненной, когда нажато «Завершить тренировку»: в «Log» пишется служебная
+// отметка с id "F|C3|Max|5|4" (она же синхронизирует номер тренировки между устройствами)
+const isFin = l => String(l.id).startsWith("F|");
+const setsOf = () => st.logs.filter(l => !isFin(l));            // только подходы
+const finId = u => "F|" + wid(u);
+const dk = l => String(l.date).slice(0,10);
+function finList(u){
+  return st.logs.filter(l => isFin(l) && l.user===u)
+    .sort((a,b) => dk(a)<dk(b) ? -1 : dk(a)>dk(b) ? 1 : String(a.id)<String(b.id) ? -1 : 1);
+}
 function workoutNo(u){
-  const m = new Map();
-  st.logs.forEach(l => { if(l.user!==u) return; const k = wkey(l); if(!k) return;
-    const d = String(l.date).slice(0,10); if(!m.has(k) || d < m.get(k)) m.set(k,d); });
-  const arr = [...m.entries()].sort((a,b) => a[1]<b[1] ? -1 : a[1]>b[1] ? 1 : a[0]<b[0] ? -1 : 1);
-  const i = arr.findIndex(e => e[0]===wid(u));
-  return { done: BASE[u] + arr.length, cur: i>=0 ? BASE[u]+i+1 : BASE[u]+arr.length+1, isDone: i>=0 };
+  const f = finList(u), i = f.findIndex(l => l.id===finId(u));
+  return { done: BASE[u] + f.length, cur: i>=0 ? BASE[u]+i+1 : BASE[u]+f.length+1, isDone: i>=0 };
+}
+// следующая позиция после завершённой: день+1 → неделя+1 → круг+1
+function nextPos(p){
+  if(p.day<4) return {cycle:p.cycle, week:p.week, day:p.day+1};
+  if(p.week<8) return {cycle:p.cycle, week:p.week+1, day:1};
+  return {cycle:p.cycle+1, week:1, day:1};
+}
+const parseFin = id => { const m = /^F\|C(\d+)\|[^|]+\|(\d+)\|(\d+)$/.exec(String(id)); return m ? {cycle:+m[1], week:+m[2], day:+m[3]} : null; };
+// если тренировку завершили на другом устройстве — подтягиваем позицию вперёд
+function followFinished(){
+  USERS.forEach(u => {
+    const f = finList(u); if(!f.length) return;
+    const last = f.reduce((a,b) => { const pa=parseFin(a.id), pb=parseFin(b.id); if(!pb) return a; if(!pa) return b;
+      return (pb.cycle*1000+pb.week*10+pb.day) > (pa.cycle*1000+pa.week*10+pa.day) ? b : a; });
+    if(st.seen[u] === last.id) return;
+    const p = parseFin(last.id); if(p) st.pos[u] = nextPos(p);
+    st.seen[u] = last.id;
+  });
+  LS.set("pos", st.pos); LS.set("seenFin", st.seen);
 }
 const find = id => st.logs.find(l => l.id === id);
 const key = l => l.week*10 + l.day;
@@ -230,16 +266,15 @@ const isHist = l => l.note==="импорт";
 // Лучший результат за всё время при повторах не меньше нижней границы схемы
 function recordOf(user, ex, reps){
   const lo = lowReps(reps); let best = null;
-  st.logs.forEach(l => { if(l.user===user && l.exercise===ex && (!hasR(l) || l.reps>=lo) && better(l,best)) best = l; });
+  setsOf().forEach(l => { if(l.user===user && l.exercise===ex && (!hasR(l) || l.reps>=lo) && better(l,best)) best = l; });
   return best;
 }
 // Лучший подход среди последних 3 предыдущих тренировок по этому упражнению (по дате, без текущей ячейки неделя/день)
 const RECENT = 3;
 function lastOf(user, ex){
   const cur = wid(user) + "|";
-  const prev = st.logs.filter(l => l.user===user && l.exercise===ex && !String(l.id).startsWith(cur));
+  const prev = setsOf().filter(l => l.user===user && l.exercise===ex && !String(l.id).startsWith(cur));
   if(!prev.length) return null;
-  const dk = l => String(l.date).slice(0,10);
   const dates = [...new Set(prev.map(dk))].sort().reverse().slice(0, RECENT);
   let best = null;
   prev.filter(l => dates.includes(dk(l))).forEach(l => { if(better(l,best)) best = l; });
@@ -251,26 +286,72 @@ function statsHTML(user, ex, reps){
 }
 const cid = (u,ex) => "st_"+btoa(unescape(encodeURIComponent(u+ex))).replace(/[^A-Za-z0-9]/g,"");
 
-function onInput(inp){
-  const {u, ex, n} = inp.dataset, id = sid(u,ex,n);
-  const w = document.querySelector(`input[data-f="w"][data-id="${CSS.escape(id)}"]`);
-  const r = document.querySelector(`input[data-f="r"][data-id="${CSS.escape(id)}"]`);
+/* ---- запись подхода по галочке ✓ ---- */
+const q1 = (sel) => document.querySelector(sel);
+const inputsOf = id => ({
+  w: q1(`input[data-f="w"][data-id="${CSS.escape(id)}"]`),
+  r: q1(`input[data-f="r"][data-id="${CSS.escape(id)}"]`),
+  b: q1(`button.ok[data-id="${CSS.escape(id)}"]`)
+});
+const inQueue = id => st.queue.some(q => (q.op==="save" && q.row.id===id) || (q.op==="del" && q.id===id));
+// Кнопка подхода: пусто / ждёт нажатия / в очереди (нет связи) / сохранено / удалить
+function refreshBtn(id){
+  const {w, r, b} = inputsOf(id); if(!b) return;
+  const saved = find(id), wv = w.value, rv = r.value;
+  let cls = "ok off", txt = "✓", dis = true;
+  if(wv==="" && rv===""){ if(saved){ cls = "ok del"; txt = "✕"; dis = false; } }
+  else if(wv!=="" && rv!==""){
+    const same = saved && +saved.weight===+wv && +saved.reps===+rv;
+    if(same){ cls = inQueue(id) ? "ok q" : "ok sv"; txt = inQueue(id) ? "⏳" : "✓"; dis = false; }
+    else { cls = "ok dirty"; dis = false; }
+  }
+  b.className = cls; b.textContent = txt; b.disabled = dis;
+  const done = !!saved && cls.includes("sv");
+  w.classList.toggle("done", done); r.classList.toggle("done", done);
+}
+const refreshAll = () => document.querySelectorAll("button.ok").forEach(b => refreshBtn(b.dataset.id));
+function refreshHead(u, ex, reps){
+  const el = document.getElementById(cid(u,ex)); if(el) el.innerHTML = statsHTML(u,ex,reps);
+  const wh = document.getElementById("wn_"+u); if(wh) wh.innerHTML = wnHTML(u);
+}
+async function commitSet(b){
+  const {u, ex, n, id, reps} = b.dataset, {w, r} = inputsOf(id);
   if(w.value==="" && r.value===""){
-    if(find(id)){
-      st.logs = st.logs.filter(l=>l.id!==id);
-      st.queue = st.queue.filter(q=>!(q.op==="save" && q.row.id===id)).concat({op:"del", id});
-    }
-    w.classList.remove("done"); r.classList.remove("done");
+    if(!find(id)) return;
+    st.logs = st.logs.filter(l => l.id!==id);
+    st.queue = st.queue.filter(q => !(q.op==="save" && q.row.id===id)).concat({op:"del", id});
   } else if(w.value!=="" && r.value!==""){
     const row = {id, date:today(), user:u, week:P(u).week, day:P(u).day, exercise:ex, set:+n, weight:+w.value, reps:+r.value, note:""};
-    st.logs = st.logs.filter(l=>l.id!==id).concat(row);
-    st.queue = st.queue.filter(q=>!(q.op==="save" && q.row.id===id)).concat({op:"save", row});
-    w.classList.add("done"); r.classList.add("done");
+    st.logs = st.logs.filter(l => l.id!==id).concat(row);
+    st.queue = st.queue.filter(q => !(q.op==="save" && q.row.id===id)).concat({op:"save", row});
   } else return;
   LS.set("logs_cache", st.logs); LS.set("queue", st.queue);
-  const el = document.getElementById(cid(u,ex)); if(el) el.innerHTML = statsHTML(u,ex,inp.dataset.reps);
-  const wh = document.getElementById("wn_"+u); if(wh) wh.innerHTML = wnHTML(u);
-  flush();
+  refreshBtn(id); refreshHead(u, ex, reps);
+  setStatus("отправка…");
+  await flush();                     // сразу уходит в таблицу, без буфера
+  refreshAll();
+}
+/* ---- завершение тренировки ---- */
+async function finishWorkout(u){
+  const pre = wid(u) + "|";
+  if(!setsOf().some(l => l.user===u && String(l.id).startsWith(pre))){
+    alert("Сначала запишите хотя бы один подход (галочка ✓)."); return; }
+  if(inQueue(finId(u))) return;
+  const p = P(u);
+  const row = {id:finId(u), date:today(), user:u, week:p.week, day:p.day, exercise:"✔ тренировка завершена", set:0, weight:0, reps:"", note:"тренировка"};
+  st.logs = st.logs.filter(l => l.id!==row.id).concat(row);
+  st.queue = st.queue.filter(q => !(q.op==="save" && q.row.id===row.id)).concat({op:"save", row});
+  st.seen[u] = row.id; st.pos[u] = nextPos(p);
+  LS.set("logs_cache", st.logs); LS.set("queue", st.queue); LS.set("pos", st.pos); LS.set("seenFin", st.seen);
+  render(); setStatus("завершаю тренировку…");
+  await flush(); await pull();       // отправили → обновили данные у всех
+}
+async function undoFinish(u){
+  const id = finId(u); if(!find(id)) return;
+  st.logs = st.logs.filter(l => l.id!==id);
+  st.queue = st.queue.filter(q => !(q.op==="save" && q.row.id===id)).concat({op:"del", id});
+  LS.set("logs_cache", st.logs); LS.set("queue", st.queue);
+  render(); await flush();
 }
 
 /* ============ ОТРИСОВКА ============ */
@@ -280,7 +361,7 @@ function render(){
 }
 function wnHTML(u){
   const n = workoutNo(u);
-  return `тренировка №${n.cur} ${n.isDone ? "✓" : "· не записана"} · выполнено ${n.done}`;
+  return `тренировка №${n.cur} ${n.isDone ? "✓ завершена" : "· идёт"} · завершено ${n.done}`;
 }
 function posBar(u){
   const p = P(u);
@@ -296,22 +377,27 @@ function userCol(u){
     const c = parseScheme(e.sch[P(u).week-1] || e.sch[e.sch.length-1]);
     let sets = "";
     for(let n=1;n<=c.sets;n++){
-      const id = sid(u,e.ex,n), l = find(id), d = l?" done":"";
+      const id = sid(u,e.ex,n), l = find(id);
       const at = `data-id="${esc(id)}" data-u="${u}" data-ex="${esc(e.ex)}" data-n="${n}" data-reps="${esc(c.reps)}"`;
+      const bc = !l ? "ok off" : inQueue(id) ? "ok q" : "ok sv";
       sets += `<div class="set"><span>${n}</span>
-        <input type="number" inputmode="decimal" step="0.5" placeholder="кг" data-f="w" ${at} class="${d.trim()}" value="${l?l.weight:""}">
-        <input type="number" inputmode="numeric" placeholder="${esc(c.reps)}" data-f="r" ${at} class="${d.trim()}" value="${l?l.reps:""}"></div>`;
+        <input type="number" inputmode="decimal" step="0.5" placeholder="кг" data-f="w" ${at} class="${l?"done":""}" value="${l?l.weight:""}">
+        <input type="number" inputmode="numeric" placeholder="${esc(c.reps)}" data-f="r" ${at} class="${l?"done":""}" value="${l?l.reps:""}">
+        <button class="${bc}" ${at} ${l?"":"disabled"}>${inQueue(id)?"⏳":"✓"}</button></div>`;
     }
     return `<div class="card"><div class="nm">${esc(e.ex)}</div><div class="sc">${c.sets}×${esc(c.reps)}</div>
       <div class="st" id="${cid(u,e.ex)}">${statsHTML(u,e.ex,c.reps)}</div>${sets}</div>`;
   }).join("") : `<div class="card mut">Нет упражнений</div>`;
-  return `<div class="${u.toLowerCase()}"><div class="colh">${u}<div class="wn" id="wn_${u}">${wnHTML(u)}</div></div>${posBar(u)}${cards}</div>`;
+  const fin = workoutNo(u).isDone
+    ? `<div class="finok">✓ Тренировка завершена</div><button class="fin2" data-unfin="${u}">↩ Вернуть в работу</button>`
+    : `<button class="fin" data-fin="${u}">✔ Завершить тренировку</button>`;
+  return `<div class="${u.toLowerCase()}"><div class="colh">${u}<div class="wn" id="wn_${u}">${wnHTML(u)}</div></div>${posBar(u)}${cards}${fin}</div>`;
 }
 const trainView = () => `<div class="cols">${USERS.map(userCol).join("")}</div>`;
 
 function progressView(){
   const sw = USERS.map(u=>`<button class="chip ${u===st.puser?"on":""}" data-pu="${u}">${u}</button>`).join(" ");
-  const mine = st.logs.filter(l=>l.user===st.puser && !isHist(l));
+  const mine = setsOf().filter(l=>l.user===st.puser && !isHist(l));
   const exs = [...new Set(mine.map(l=>l.exercise))];
   if(!exs.length) return `<div class="row" style="margin-bottom:10px">${sw}</div><div class="pc mut">Пока нет записей.</div>`;
   const sel = st.pex && exs.includes(st.pex) ? st.pex : exs[0];
@@ -334,6 +420,9 @@ function progressView(){
 /* ============ СОБЫТИЯ ============ */
 document.addEventListener("click", e=>{
   const t = e.target.closest("button"); if(!t) return;
+  if(t.classList.contains("ok")){ commitSet(t); return; }
+  if(t.dataset.fin){ finishWorkout(t.dataset.fin); return; }
+  if(t.dataset.unfin){ undoFinish(t.dataset.unfin); return; }
   if(t.dataset.v){ st.view = st.view==="train" ? "prog" : "train"; }
   else if(t.dataset.pu){ st.puser=t.dataset.pu; LS.set("puser",st.puser); }
   else if(t.id==="cfg"){
@@ -348,11 +437,17 @@ document.addEventListener("change", e=>{
   else if(e.target.dataset && e.target.dataset.pos){
     const d = e.target.dataset; st.pos[d.u][d.pos] = +e.target.value; LS.set("pos", st.pos); render();
   }
-  else if(e.target.dataset && e.target.dataset.f){ const d=e.target.dataset; e.target.dataset.ex=d.ex; onInput(e.target); }
+});
+// пока вводите значения — только обновляем состояние галочки, ничего не отправляем
+document.addEventListener("input", e=>{
+  const d = e.target.dataset; if(d && d.f) refreshBtn(d.id);
 });
 window.addEventListener("online", ()=>flush().then(pull));
+// вернулись в приложение (развернули телефон) — сразу дослать очередь и подтянуть свежие данные
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") flush().then(pull); });
 
-render(); flush().then(pull);
+followFinished();
+render(); flush().then(pull);       // сначала мгновенно рисуем из кэша, потом тихо обновляем
 </script>
 </body>
 </html>
