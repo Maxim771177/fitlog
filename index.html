@@ -38,6 +38,8 @@ button.fin2{width:100%;padding:8px;margin:2px 0 14px;border-radius:10px;border:1
 .set span{font-size:11px;color:var(--mut)}
 input{width:100%;min-width:0;padding:5px 2px;text-align:center;border:1px solid var(--ln);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:14px}
 input.done{background:var(--ok)}
+input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
 #status{font-size:11px;color:var(--mut);margin-top:3px}
 .tabs{display:flex;gap:6px;margin-top:6px;align-items:center}
 .mut{color:var(--mut);font-size:13px}
@@ -288,6 +290,7 @@ const cid = (u,ex) => "st_"+btoa(unescape(encodeURIComponent(u+ex))).replace(/[^
 
 /* ---- запись подхода по галочке ✓ ---- */
 const q1 = (sel) => document.querySelector(sel);
+const num = v => { const x = parseFloat(String(v).replace(",", ".")); return isNaN(x) ? null : x; };   // "12,5" и "12.5" → 12.5
 const inputsOf = id => ({
   w: q1(`input[data-f="w"][data-id="${CSS.escape(id)}"]`),
   r: q1(`input[data-f="r"][data-id="${CSS.escape(id)}"]`),
@@ -297,11 +300,11 @@ const inQueue = id => st.queue.some(q => (q.op==="save" && q.row.id===id) || (q.
 // Кнопка подхода: пусто / ждёт нажатия / в очереди (нет связи) / сохранено / удалить
 function refreshBtn(id){
   const {w, r, b} = inputsOf(id); if(!b) return;
-  const saved = find(id), wv = w.value, rv = r.value;
+  const saved = find(id), wv = w.value.trim(), rv = r.value.trim(), wn = num(wv), rn = num(rv);
   let cls = "ok off", txt = "✓", dis = true;
   if(wv==="" && rv===""){ if(saved){ cls = "ok del"; txt = "✕"; dis = false; } }
-  else if(wv!=="" && rv!==""){
-    const same = saved && +saved.weight===+wv && +saved.reps===+rv;
+  else if(wn!==null && rn!==null){
+    const same = saved && +saved.weight===wn && +saved.reps===rn;
     if(same){ cls = inQueue(id) ? "ok q" : "ok sv"; txt = inQueue(id) ? "⏳" : "✓"; dis = false; }
     else { cls = "ok dirty"; dis = false; }
   }
@@ -316,12 +319,13 @@ function refreshHead(u, ex, reps){
 }
 async function commitSet(b){
   const {u, ex, n, id, reps} = b.dataset, {w, r} = inputsOf(id);
-  if(w.value==="" && r.value===""){
+  const wn = num(w.value), rn = num(r.value);
+  if(w.value.trim()==="" && r.value.trim()===""){
     if(!find(id)) return;
     st.logs = st.logs.filter(l => l.id!==id);
     st.queue = st.queue.filter(q => !(q.op==="save" && q.row.id===id)).concat({op:"del", id});
-  } else if(w.value!=="" && r.value!==""){
-    const row = {id, date:today(), user:u, week:P(u).week, day:P(u).day, exercise:ex, set:+n, weight:+w.value, reps:+r.value, note:""};
+  } else if(wn!==null && rn!==null){
+    const row = {id, date:today(), user:u, week:P(u).week, day:P(u).day, exercise:ex, set:+n, weight:wn, reps:rn, note:""};
     st.logs = st.logs.filter(l => l.id!==id).concat(row);
     st.queue = st.queue.filter(q => !(q.op==="save" && q.row.id===id)).concat({op:"save", row});
   } else return;
@@ -381,8 +385,8 @@ function userCol(u){
       const at = `data-id="${esc(id)}" data-u="${u}" data-ex="${esc(e.ex)}" data-n="${n}" data-reps="${esc(c.reps)}"`;
       const bc = !l ? "ok off" : inQueue(id) ? "ok q" : "ok sv";
       sets += `<div class="set"><span>${n}</span>
-        <input type="number" inputmode="decimal" step="0.5" placeholder="кг" data-f="w" ${at} class="${l?"done":""}" value="${l?l.weight:""}">
-        <input type="number" inputmode="numeric" placeholder="${esc(c.reps)}" data-f="r" ${at} class="${l?"done":""}" value="${l?l.reps:""}">
+        <input type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="кг" data-f="w" ${at} class="${l?"done":""}" value="${l?l.weight:""}">
+        <input type="text" inputmode="numeric" autocomplete="off" enterkeyhint="done" placeholder="${esc(c.reps)}" data-f="r" ${at} class="${l?"done":""}" value="${l?l.reps:""}">
         <button class="${bc}" ${at} ${l?"":"disabled"}>${inQueue(id)?"⏳":"✓"}</button></div>`;
     }
     return `<div class="card"><div class="nm">${esc(e.ex)}</div><div class="sc">${c.sets}×${esc(c.reps)}</div>
@@ -442,6 +446,7 @@ document.addEventListener("change", e=>{
 document.addEventListener("input", e=>{
   const d = e.target.dataset; if(d && d.f) refreshBtn(d.id);
 });
+document.addEventListener("focusin", e=>{ const d=e.target.dataset; if(d && d.f && e.target.value!=="") setTimeout(()=>{ try{ e.target.select(); }catch{} }, 0); });
 window.addEventListener("online", ()=>flush().then(pull));
 // вернулись в приложение (развернули телефон) — сразу дослать очередь и подтянуть свежие данные
 document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") flush().then(pull); });
