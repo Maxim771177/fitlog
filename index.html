@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FitLog Duo</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#14181f;--mut:#667085;--ln:#e4e7ec;--max:#d92d20;--shirin:#12a150;--ac:var(--max)}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#181c25;--tx:#eef0f4;--mut:#98a2b3;--ln:#2a303c}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,sans-serif}
+body.shirin{--ac:var(--shirin)}
+header{position:sticky;top:0;background:var(--bg);padding:12px 16px;border-bottom:1px solid var(--ln);z-index:5}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.seg button,.chip{border:1px solid var(--ln);background:var(--card);color:var(--tx);padding:8px 14px;border-radius:999px;font:inherit;cursor:pointer}
+.seg button.on,.chip.on{background:var(--ac);border-color:var(--ac);color:#fff}
+main{padding:16px;max-width:720px;margin:auto}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:14px;padding:14px;margin-bottom:12px}
+h2{margin:0 0 4px;font-size:17px}.mut{color:var(--mut);font-size:13px}
+.set{display:grid;grid-template-columns:24px 1fr 1fr 44px;gap:8px;align-items:center;margin-top:8px}
+input{width:100%;padding:10px;border:1px solid var(--ln);border-radius:10px;background:var(--bg);color:var(--tx);font:inherit}
+.ok{background:var(--ac);color:#fff;border:0;border-radius:10px;height:42px;font-size:18px;cursor:pointer}
+.ok.done{opacity:.45}
+#status{font-size:12px;color:var(--mut);margin-left:auto}
+.tabs{display:flex;gap:8px;margin-top:10px}
+svg{width:100%;height:120px}
+.btn{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:10px 14px;font:inherit;cursor:pointer}
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <div class="seg" id="users"></div>
+    <span id="status">…</span>
+    <button class="chip" id="cfg">⚙</button>
+  </div>
+  <div class="tabs"><button class="chip on" data-v="train">Тренировка</button><button class="chip" data-v="prog">Прогресс</button></div>
+</header>
+<main id="main"></main>
+
+<script>
+/* ============ НАСТРОЙКИ ============ */
+// URL веб-приложения Apps Script (можно задать здесь или через ⚙ в приложении)
+const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbyWca7XSgE0ZCdjW6xHzU_cI1Tgt-KkXqjmJgpX3E_OQbIKcuSPdRApqSfCpt0gA_THlg/exec";
+
+/* ============ ПРОГРАММА (из таблицы) ============
+ * Схема подходов×повторов по неделям 1–8. У Max (красные строки) и Shirin она общая для всех упражнений;
+ * в таблице у Shirin в 5–8 неделях есть отличия по отдельным упражнениям — их можно задать третьим
+ * элементом [название, схема[8]] или через лист "Program" (user|day|order|exercise|w1..w8).
+ */
+const SCH_MAX = ["2x8-10","3x12-15","3x12-15","3x12-15","4x10-12","4x10-12","4x10-12","4x10-12"];
+const SCH_SH  = ["2x12-15","2x12-15","3x10-12","3x10-12","3x10-12","4x8-10","4x8-10","4x8"];
+const P = (sch, list) => list.map(x => Array.isArray(x) ? {ex:x[0], sch:x[1]} : {ex:x, sch});
+const DRAFT = {
+  Max: {
+    1: P(SCH_MAX, ["Мёртвая тяга","Сгибание ног лёжа","Тяга верхнего блока широким хватом","Икры сидя","Тяга горизонтальная (широким)","Задняя дельта в кроссовере","Пресс скручивания","Бицепс со штангой"]),
+    2: P(SCH_MAX, ["Жим ногами","Жим лёжа","Икры стоя","Сведение в кроссовере на грудь","Трицепс (разгибание в кроссовере)","Плечи (протяжка штанги)","Трицепс из-за головы с канатом","Махи в тренажёре на плечи"]),
+    3: P(SCH_MAX, ["Мёртвая тяга по одной ноге","Тяга верхнего блока (узким)","Жим на плечи в тренажёре","Горизонтальная тяга","Пресс подъём ног","Пулловер","Бицепс скотт","Задняя дельта (кроссовер)","Бицепс молот"]),
+    4: P(SCH_MAX, ["Вертикальная тяга узким хватом","Приседания","Разгибания ног","Жим на наклонной","Сведение на грудные сидя","Разгибания на трицепс","Махи с гантелями стоя","Сведение ног"])
+  },
+  Shirin: {
+    1: P(SCH_SH, ["Выпады на месте в сторону","Разведение ног (сидя)","Отжимания","Вертикальная тяга узким хватом","Махи в стороны по одной гантеле","Трицепс разгибания","Пресс на наклонной (3 в тренаж от начала)"]),
+    2: P(SCH_SH, ["Приседы","Гиперэкстензия (вторая метка)","Подтягивания","Плечи (задние дельты в кроссовере)","Пресс (ноги вверх 3)"]),
+    3: P(SCH_SH, ["Сплит-присед (зашагивание с резинкой)","Ягодичный мост (тренажёр)","Жим штанги на плечи","Сведение ног","Узкие отжимания","Пресс на наклонной (3 в тренаж от начала)"]),
+    4: P(SCH_SH, ["Подтягивания узким хватом","Разведение ног (лёжа)","Мёртвая тяга","Разгибания на трицепс лёжа","Горизонтальная тяга широким хватом",
+      ["Крабик с резинками",["2x30","2x30","3x10-12","3x10-12","3x10-12","4x8-10","4x8-10","4x8-10"]]])
+  }
+};
+// "3x10-12" -> {sets:3, reps:"10-12"}
+const parseScheme = s => { const m = /^(\d+)\s*[x×х]\s*(.+)$/i.exec(String(s||"").trim()); return m ? {sets:+m[1], reps:m[2]} : {sets:3, reps:"10"}; };
+const cur = e => parseScheme(e.sch[st.week-1] || e.sch[e.sch.length-1]);
+
+/* ============ СОСТОЯНИЕ ============ */
+const LS = {
+  get(k, d){ try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+const st = {
+  user: LS.get("user","Max"), week: LS.get("week",1), day: LS.get("day",1), view: "train",
+  api: LS.get("api", DEFAULT_API_URL),
+  logs: LS.get("logs_cache", []),      // кэш; источник истины — Google Sheets
+  queue: LS.get("queue", []),          // ещё не отправленные подходы
+  program: null
+};
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function setStatus(t){ $("#status").textContent = t; }
+
+/* ============ API (Google Sheets через Apps Script) ============ */
+async function pull(){
+  if(!st.api){ setStatus("нет API URL (⚙)"); return; }
+  try{
+    setStatus("загрузка…");
+    const r = await (await fetch(st.api + "?action=getAll")).json();
+    if(!r.ok) throw new Error(r.error);
+    const pending = new Set(st.queue.map(q => q.id));
+    st.logs = r.logs.filter(l => !pending.has(l.id)).concat(st.queue);
+    LS.set("logs_cache", st.logs);
+    if(r.program && r.program.length) st.program = buildProgram(r.program);
+    setStatus("синхронизировано ✓"); render();
+  }catch(e){ setStatus("офлайн, кэш"); }
+}
+async function flush(){
+  if(!st.api || !st.queue.length) return;
+  try{
+    const r = await (await fetch(st.api, {method:"POST", headers:{"Content-Type":"text/plain"},
+      body: JSON.stringify({action:"saveSets", rows: st.queue})})).json();
+    if(!r.ok) throw new Error(r.error);
+    st.queue = []; LS.set("queue", []); setStatus("сохранено в Google Sheets ✓");
+  }catch(e){ setStatus(`в очереди: ${st.queue.length} (нет связи)`); }
+}
+function buildProgram(rows){
+  const p = {};
+  rows.sort((a,b)=>a.order-b.order).forEach(r=>{
+    ((p[r.user] ??= {})[r.day] ??= []).push({ex:r.exercise, sch:[1,2,3,4,5,6,7,8].map(i=>r["w"+i])});
+  });
+  return p;
+}
+const prog = () => (st.program || DRAFT);
+
+/* ============ ЛОГИКА ============ */
+const today = () => new Date().toISOString().slice(0,10);
+const sid = (ex,n) => [st.user,st.week,st.day,ex,n].join("|");
+const find = id => st.logs.find(l => l.id === id);
+function lastTime(ex){
+  const ls = st.logs.filter(l => l.user===st.user && l.exercise===ex && !(l.week==st.week && l.day==st.day));
+  if(!ls.length) return null;
+  const top = ls.sort((a,b)=> String(b.date).localeCompare(String(a.date)) || b.week-a.week)[0];
+  return `${top.weight} кг × ${top.reps}`;
+}
+function saveSet(ex, n){
+  const w = $(`[data-w="${CSS.escape(sid(ex,n))}"]`).value, r = $(`[data-r="${CSS.escape(sid(ex,n))}"]`).value;
+  if(w==="" || r==="") return;
+  const row = {id:sid(ex,n), date:today(), user:st.user, week:st.week, day:st.day, exercise:ex, set:n, weight:+w, reps:+r, note:""};
+  st.logs = st.logs.filter(l => l.id !== row.id).concat(row);
+  st.queue = st.queue.filter(l => l.id !== row.id).concat(row);
+  LS.set("logs_cache", st.logs); LS.set("queue", st.queue);
+  flush(); render();
+}
+
+/* ============ ОТРИСОВКА ============ */
+function render(){
+  document.body.className = st.user.toLowerCase();
+  $("#users").innerHTML = ["Max","Shirin"].map(u=>`<button class="${u===st.user?"on":""}" data-u="${u}">${u}</button>`).join("");
+  document.querySelectorAll(".tabs .chip").forEach(b=>b.classList.toggle("on", b.dataset.v===st.view));
+  $("#main").innerHTML = st.view==="train" ? trainView() : progressView();
+}
+function trainView(){
+  const wk = [1,2,3,4,5,6,7,8].map(w=>`<button class="chip ${w==st.week?"on":""}" data-wk="${w}">Нед ${w}</button>`).join(" ");
+  const dy = [1,2,3,4].map(d=>`<button class="chip ${d==st.day?"on":""}" data-dy="${d}">День ${d}</button>`).join(" ");
+  const list = (prog()[st.user]||{})[st.day] || [];
+  const body = list.length ? list.map(e=>{
+    const last = lastTime(e.ex);
+    let sets = ""; const c = cur(e);
+    for(let n=1;n<=c.sets;n++){
+      const id = sid(e.ex,n), l = find(id);
+      sets += `<div class="set"><span class="mut">${n}</span>
+        <input type="number" inputmode="decimal" step="0.5" placeholder="кг" data-w="${esc(id)}" value="${l?l.weight:""}">
+        <input type="number" inputmode="numeric" placeholder="повт ${esc(c.reps)}" data-r="${esc(id)}" value="${l?l.reps:""}">
+        <button class="ok ${l?"done":""}" data-save="${esc(e.ex)}|${n}">✓</button></div>`;
+    }
+    return `<div class="card"><h2>${esc(e.ex)}</h2><div class="mut">${c.sets}×${esc(c.reps)}${last?` · прошлый раз: ${last}`:""}</div>${sets}</div>`;
+  }).join("") : `<div class="card mut">Для этого дня упражнения не заданы. Заполните лист «Program» в таблице (user | day | order | exercise | w1…w8) и обновите страницу.</div>`;
+  return `<div class="row" style="margin-bottom:8px;overflow:auto">${wk}</div><div class="row" style="margin-bottom:12px">${dy}</div>${body}`;
+}
+function progressView(){
+  const mine = st.logs.filter(l=>l.user===st.user);
+  const exs = [...new Set(mine.map(l=>l.exercise))];
+  if(!exs.length) return `<div class="card mut">Пока нет записей.</div>`;
+  const sel = st.pex && exs.includes(st.pex) ? st.pex : exs[0];
+  const byWeek = {};
+  mine.filter(l=>l.exercise===sel).forEach(l=>{ byWeek[l.week] = Math.max(byWeek[l.week]||0, +l.weight); });
+  const pts = Object.entries(byWeek).map(([w,v])=>[+w,v]).sort((a,b)=>a[0]-b[0]);
+  const max = Math.max(...pts.map(p=>p[1])), min = Math.min(...pts.map(p=>p[1]));
+  const X = w => 20 + (w-1)/7*260, Y = v => max===min ? 60 : 100 - (v-min)/(max-min)*80;
+  const path = pts.map((p,i)=>`${i?"L":"M"}${X(p[0])},${Y(p[1])}`).join(" ");
+  const dots = pts.map(p=>`<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="4" fill="var(--ac)"/><text x="${X(p[0])}" y="${Y(p[1])-8}" font-size="10" text-anchor="middle" fill="currentColor">${p[1]}</text>`).join("");
+  const opts = exs.map(e=>`<option ${e===sel?"selected":""}>${esc(e)}</option>`).join("");
+  const total = mine.length, vol = mine.reduce((s,l)=>s+l.weight*l.reps,0);
+  return `<div class="card"><select id="pex" style="width:100%;padding:10px;border-radius:10px">${opts}</select>
+    <div class="mut" style="margin:8px 0">Макс. вес по неделям</div>
+    <svg viewBox="0 0 300 120"><path d="${path}" fill="none" stroke="var(--ac)" stroke-width="2"/>${dots}</svg></div>
+    <div class="card mut">Подходов записано: <b>${total}</b> · Общий тоннаж: <b>${Math.round(vol)} кг</b></div>`;
+}
+
+/* ============ СОБЫТИЯ ============ */
+document.addEventListener("click", e=>{
+  const t = e.target.closest("button"); if(!t) return;
+  if(t.dataset.u){ st.user=t.dataset.u; LS.set("user",st.user); }
+  else if(t.dataset.wk){ st.week=+t.dataset.wk; LS.set("week",st.week); }
+  else if(t.dataset.dy){ st.day=+t.dataset.dy; LS.set("day",st.day); }
+  else if(t.dataset.v){ st.view=t.dataset.v; }
+  else if(t.dataset.save){ const [ex,n]=t.dataset.save.split("|"); return saveSet(ex,+n); }
+  else if(t.id==="cfg"){
+    const u = prompt("URL веб-приложения Google Apps Script:", st.api);
+    if(u!==null){ st.api=u.trim(); LS.set("api",st.api); pull().then(flush); }
+    return;
+  } else return;
+  render();
+});
+document.addEventListener("change", e=>{ if(e.target.id==="pex"){ st.pex=e.target.value; render(); } });
+window.addEventListener("online", ()=>flush().then(pull));
+
+render(); flush().then(pull);
+</script>
+</body>
+</html>
