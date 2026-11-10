@@ -1,7 +1,7 @@
 /* FitLog Duo — service worker: приложение открывается мгновенно и работает без сети.
  * Оболочка (index.html, иконки, манифест) берётся из кэша и тихо обновляется в фоне.
  * Запросы к Google Apps Script (данные, запись подходов) НЕ кэшируются. */
-const CACHE = "fitlog-v1";
+const CACHE = "fitlog-v2";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
