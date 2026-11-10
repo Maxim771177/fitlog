@@ -167,7 +167,7 @@ const LS = {
 };
 const st = {
   // у каждого своя позиция: круг / неделя / день (тренируемся независимо)
-  pos: LS.get("pos", { Max:{cycle:3,week:5,day:4}, Shirin:{cycle:3,week:5,day:4} }),
+  pos: LS.get("pos", { Max:{cycle:3,week:5,day:4}, Shirin:{cycle:4,week:1,day:1} }),
   view: "train", puser: LS.get("puser","Max"),
   api: LS.get("api", DEFAULT_API_URL),
   seen: LS.get("seenFin", {}),         // последняя завершённая тренировка, по которой уже сдвинули позицию
@@ -254,11 +254,19 @@ function nextPos(p, u){
 }
 const parseFin = id => { const m = /^F\|C(\d+)\|[^|]+\|(\d+)\|(\d+)$/.exec(String(id)); return m ? {cycle:+m[1], week:+m[2], day:+m[3]} : null; };
 // если тренировку завершили на другом устройстве — подтягиваем позицию вперёд
+// С какой позиции начинается новая программа: пока по ней не завершено ни одной тренировки,
+// на каждом устройстве один раз ставим эту позицию (вместо «следующей» после старой программы)
+const START = { Shirin: {cycle:4, week:1, day:1} };
 function followFinished(){
   USERS.forEach(u => {
     const f = finList(u); if(!f.length) return;
     const last = f.reduce((a,b) => { const pa=parseFin(a.id), pb=parseFin(b.id); if(!pb) return a; if(!pa) return b;
       return (pb.cycle*1000+pb.week*10+pb.day) > (pa.cycle*1000+pa.week*10+pa.day) ? b : a; });
+    const s0 = START[u], pl = parseFin(last.id);
+    if(s0 && !LS.get("startDone_"+u, false)){
+      LS.set("startDone_"+u, true);
+      if(!pl || pl.cycle < s0.cycle){ st.pos[u] = Object.assign({}, s0); st.seen[u] = last.id; return; }
+    }
     if(st.seen[u] === last.id) return;
     const p = parseFin(last.id); if(p) st.pos[u] = nextPos(p, u);
     st.seen[u] = last.id;
