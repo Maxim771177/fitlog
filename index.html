@@ -246,8 +246,9 @@ function workoutNo(u){
   return { done: BASE[u] + f.length, cur: i>=0 ? BASE[u]+i+1 : BASE[u]+f.length+1, isDone: i>=0 };
 }
 // следующая позиция после завершённой: день+1 → неделя+1 → круг+1
-function nextPos(p){
-  if(p.day<4) return {cycle:p.cycle, week:p.week, day:p.day+1};
+const daysOf = u => { const d = Object.keys((prog()||{})[u]||{}).map(Number).filter(n=>n>0); return d.length ? Math.max(...d) : 4; };   // сколько дней в программе у человека
+function nextPos(p, u){
+  if(p.day<daysOf(u)) return {cycle:p.cycle, week:p.week, day:p.day+1};
   if(p.week<8) return {cycle:p.cycle, week:p.week+1, day:1};
   return {cycle:p.cycle+1, week:1, day:1};
 }
@@ -259,7 +260,7 @@ function followFinished(){
     const last = f.reduce((a,b) => { const pa=parseFin(a.id), pb=parseFin(b.id); if(!pb) return a; if(!pa) return b;
       return (pb.cycle*1000+pb.week*10+pb.day) > (pa.cycle*1000+pa.week*10+pa.day) ? b : a; });
     if(st.seen[u] === last.id) return;
-    const p = parseFin(last.id); if(p) st.pos[u] = nextPos(p);
+    const p = parseFin(last.id); if(p) st.pos[u] = nextPos(p, u);
     st.seen[u] = last.id;
   });
   LS.set("pos", st.pos); LS.set("seenFin", st.seen);
@@ -353,7 +354,7 @@ async function finishWorkout(u){
   const row = {id:finId(u), date:today(), user:u, week:p.week, day:p.day, exercise:"✔ тренировка завершена", set:0, weight:0, reps:"", note:"тренировка"};
   st.logs = st.logs.filter(l => l.id!==row.id).concat(row);
   st.queue = st.queue.filter(q => !(q.op==="save" && q.row.id===row.id)).concat({op:"save", row});
-  st.seen[u] = row.id; st.pos[u] = nextPos(p);
+  st.seen[u] = row.id; st.pos[u] = nextPos(p, u);
   LS.set("logs_cache", st.logs); LS.set("queue", st.queue); LS.set("pos", st.pos); LS.set("seenFin", st.seen);
   render(); setStatus("завершаю тренировку…");
   await flush(); await pull();       // отправили → обновили данные у всех
@@ -381,7 +382,7 @@ function posBar(u){
   return `<div class="pos">
     <select data-pos="cycle" data-u="${u}">${opt(Math.max(6,p.cycle+1), p.cycle, "Круг")}</select>
     <select data-pos="week" data-u="${u}">${opt(8, p.week, "Нед")}</select>
-    <select data-pos="day" data-u="${u}">${opt(4, p.day, "День")}</select></div>`;
+    <select data-pos="day" data-u="${u}">${opt(daysOf(u), p.day, "День")}</select></div>`;
 }
 function userCol(u){
   const list = (prog()[u]||{})[P(u).day] || [];
